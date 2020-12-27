@@ -4,8 +4,9 @@ import com.alibaba.fastjson.{JSON, JSONObject}
 import com.ibeifeng.sparkproject.conf.ConfigurationManager
 import com.ibeifeng.sparkproject.constant.Constants
 import com.ibeifeng.sparkproject.dao.factory.DAOFactory
+import com.ibeifeng.sparkproject.domain.SessionAggrStat
 import com.ibeifeng.sparkproject.test.MockData
-import com.ibeifeng.sparkproject.util.{DateUtils, ParamUtils, StringUtils, ValidUtils}
+import com.ibeifeng.sparkproject.util._
 import org.apache.spark.rdd.RDD
 import org.apache.spark.sql.hive.HiveContext
 import org.apache.spark.sql.{Row, SQLContext}
@@ -35,6 +36,8 @@ import org.apache.spark.{Accumulator, SparkConf, SparkContext}
   *
   */
 object UserVisitSessionAnalyzeSpark {
+
+
   def main(args: Array[String]): Unit = {
     val conf = new SparkConf().setAppName(Constants.SPARK_APP_NAME_SESSION).setMaster("local")
     val sc = new SparkContext(conf)
@@ -68,7 +71,7 @@ object UserVisitSessionAnalyzeSpark {
     val sessionid2AggrInfoRdd= aggregateBySession(sqlContext,actionRDD)
 
     //打印测试
-//    println(sessionid2AggrInfoRdd.count())
+//    println("sessionid2AggrInfoRdd.count():"+sessionid2AggrInfoRdd.count())
 
 //    sessionid2AggrInfoRdd.take(10).foreach(println)
 
@@ -79,10 +82,15 @@ object UserVisitSessionAnalyzeSpark {
     val sessionAggrStatAccumulator=sc.accumulator("")(SessionAggrStatAccumulator)
      val filteredSessionid2AggrInfoRDD= filterSessionAndAggrStat(sessionid2AggrInfoRdd,taskParam,sessionAggrStatAccumulator)
 
-    //打印测试
-//    println(filteredSessionid2AggrInfoRDD.count())
 
-//    filteredSessionid2AggrInfoRDD.take(10).foreach(println)
+    //action行为，触发RDD执行计算
+    filteredSessionid2AggrInfoRDD.count()
+    println("sessionAggrStatAccumulator.value:"+sessionAggrStatAccumulator.value)
+
+
+//  计算出各个范围的session占比，并写入MySQL
+    calculateAndPersistAggrStat(sessionAggrStatAccumulator.value,taskid)
+
 
     /**
       * session聚合统计（统计出访问时长和访问步长，各个区间的session数量 占总session数量 的比例）
@@ -438,4 +446,78 @@ object UserVisitSessionAnalyzeSpark {
       sessionAggrStatAccumulator.add(Constants.STEP_PERIOD_60);
     }
   }
+
+
+  /**
+    * 计算各session范围占比，并写入MYSQL
+    * @param value
+    */
+  def calculateAndPersistAggrStat(value: String,taskid:Long) = {
+
+    // 从Accumulator统计串中获取值
+    // 从Accumulator统计串中获取值
+
+    val session_count = StringUtils.getFieldFromConcatString(value, "\\|", Constants.SESSION_COUNT).toLong
+
+    val visit_length_1s_3s = StringUtils.getFieldFromConcatString(value, "\\|", Constants.TIME_PERIOD_1s_3s).toLong
+    val visit_length_4s_6s = StringUtils.getFieldFromConcatString(value, "\\|", Constants.TIME_PERIOD_4s_6s).toLong
+    val visit_length_7s_9s = StringUtils.getFieldFromConcatString(value, "\\|", Constants.TIME_PERIOD_7s_9s).toLong
+    val visit_length_10s_30s = StringUtils.getFieldFromConcatString(value, "\\|", Constants.TIME_PERIOD_10s_30s).toLong
+    val visit_length_30s_60s = StringUtils.getFieldFromConcatString(value, "\\|", Constants.TIME_PERIOD_30s_60s).toLong
+    val visit_length_1m_3m = StringUtils.getFieldFromConcatString(value, "\\|", Constants.TIME_PERIOD_1m_3m).toLong
+    val visit_length_3m_10m = StringUtils.getFieldFromConcatString(value, "\\|", Constants.TIME_PERIOD_3m_10m).toLong
+    val visit_length_10m_30m = StringUtils.getFieldFromConcatString(value, "\\|", Constants.TIME_PERIOD_10m_30m).toLong
+    val visit_length_30m = StringUtils.getFieldFromConcatString(value, "\\|", Constants.TIME_PERIOD_30m).toLong
+
+    val step_length_1_3 = StringUtils.getFieldFromConcatString(value, "\\|", Constants.STEP_PERIOD_1_3).toLong
+    val step_length_4_6 = StringUtils.getFieldFromConcatString(value, "\\|", Constants.STEP_PERIOD_4_6).toLong
+    val step_length_7_9 = StringUtils.getFieldFromConcatString(value, "\\|", Constants.STEP_PERIOD_7_9).toLong
+    val step_length_10_30 = StringUtils.getFieldFromConcatString(value, "\\|", Constants.STEP_PERIOD_10_30).toLong
+    val step_length_30_60 = StringUtils.getFieldFromConcatString(value, "\\|", Constants.STEP_PERIOD_30_60).toLong
+    val step_length_60 = StringUtils.getFieldFromConcatString(value, "\\|", Constants.STEP_PERIOD_60).toLong
+
+    // 计算各个访问时长和访问步长的范围
+    val visit_length_1s_3s_ratio = NumberUtils.formatDouble(visit_length_1s_3s.toDouble / session_count.toDouble, 2)
+    val visit_length_4s_6s_ratio = NumberUtils.formatDouble(visit_length_4s_6s.toDouble / session_count.toDouble, 2)
+    val visit_length_7s_9s_ratio = NumberUtils.formatDouble(visit_length_7s_9s.toDouble / session_count.toDouble, 2)
+    val visit_length_10s_30s_ratio = NumberUtils.formatDouble(visit_length_10s_30s.toDouble / session_count.toDouble, 2)
+    val visit_length_30s_60s_ratio = NumberUtils.formatDouble(visit_length_30s_60s.toDouble / session_count.toDouble, 2)
+    val visit_length_1m_3m_ratio = NumberUtils.formatDouble(visit_length_1m_3m.toDouble / session_count.toDouble, 2)
+    val visit_length_3m_10m_ratio = NumberUtils.formatDouble(visit_length_3m_10m.toDouble / session_count.toDouble, 2)
+    val visit_length_10m_30m_ratio = NumberUtils.formatDouble(visit_length_10m_30m.toDouble / session_count.toDouble, 2)
+    val visit_length_30m_ratio = NumberUtils.formatDouble(visit_length_30m.toDouble / session_count.toDouble, 2)
+
+    val step_length_1_3_ratio = NumberUtils.formatDouble(step_length_1_3.toDouble / session_count.toDouble, 2)
+    val step_length_4_6_ratio = NumberUtils.formatDouble(step_length_4_6.toDouble / session_count.toDouble, 2)
+    val step_length_7_9_ratio = NumberUtils.formatDouble(step_length_7_9.toDouble / session_count.toDouble, 2)
+    val step_length_10_30_ratio = NumberUtils.formatDouble(step_length_10_30.toDouble / session_count.toDouble, 2)
+    val step_length_30_60_ratio = NumberUtils.formatDouble(step_length_30_60.toDouble / session_count.toDouble, 2)
+    val step_length_60_ratio = NumberUtils.formatDouble(step_length_60.toDouble / session_count.toDouble, 2)
+
+    // 将统计结果封装为Domain对象
+    val sessionAggrStat = new SessionAggrStat
+    sessionAggrStat.setTaskid(taskid)
+    sessionAggrStat.setSession_count(session_count)
+    sessionAggrStat.setVisit_length_1s_3s_ratio(visit_length_1s_3s_ratio)
+    sessionAggrStat.setVisit_length_4s_6s_ratio(visit_length_4s_6s_ratio)
+    sessionAggrStat.setVisit_length_7s_9s_ratio(visit_length_7s_9s_ratio)
+    sessionAggrStat.setVisit_length_10s_30s_ratio(visit_length_10s_30s_ratio)
+    sessionAggrStat.setVisit_length_30s_60s_ratio(visit_length_30s_60s_ratio)
+    sessionAggrStat.setVisit_length_1m_3m_ratio(visit_length_1m_3m_ratio)
+    sessionAggrStat.setVisit_length_3m_10m_ratio(visit_length_3m_10m_ratio)
+    sessionAggrStat.setVisit_length_10m_30m_ratio(visit_length_10m_30m_ratio)
+    sessionAggrStat.setVisit_length_30m_ratio(visit_length_30m_ratio)
+    sessionAggrStat.setStep_length_1_3_ratio(step_length_1_3_ratio)
+    sessionAggrStat.setStep_length_4_6_ratio(step_length_4_6_ratio)
+    sessionAggrStat.setStep_length_7_9_ratio(step_length_7_9_ratio)
+    sessionAggrStat.setStep_length_10_30_ratio(step_length_10_30_ratio)
+    sessionAggrStat.setStep_length_30_60_ratio(step_length_30_60_ratio)
+    sessionAggrStat.setStep_length_60_ratio(step_length_60_ratio)
+
+    // 调用对应的DAO插入统计结果
+    val sessionAggrStatDAO = DAOFactory.getSessionAggrStatDAO
+    sessionAggrStatDAO.insert(sessionAggrStat)
+  }
+
+
 }
