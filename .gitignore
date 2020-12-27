@@ -1,0 +1,14 @@
+.idea/
+*.iml
+/out
+src/main/java/rebel.xml
+src/main/resources/rebel.xml
+/target
+.settings
+.classpath
+.factorypath
+.project
+.~*
+.mvn/
+mvnw
+mvnw.cmd
